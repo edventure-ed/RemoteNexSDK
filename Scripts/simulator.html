@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RemoteNex Simulator</title>
+    <style>
+        body { margin: 0; background-color: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: white; display: flex; flex-direction: column; height: 100vh; }
+        
+        /* Üst Bar */
+        .header { background-color: #111; padding: 12px 20px; display: flex; align-items: center; border-bottom: 2px solid #333; box-shadow: 0 4px 6px rgba(0,0,0,0.3); gap: 15px; flex-wrap: wrap; }
+        .logo { font-size: 18px; font-weight: bold; color: #00d4ff; margin-right: 15px; display: flex; align-items: center; }
+        .logo span { color: #fff; margin-left: 5px; }
+        
+        /* Butonlar & Kontroller */
+        .controls { display: flex; gap: 8px; align-items: center; }
+        
+        button, select { background-color: #333; color: white; border: 1px solid #555; padding: 6px 10px; border-radius: 5px; cursor: pointer; transition: all 0.2s; font-weight: 500; font-size: 12px; display: flex; align-items: center; gap: 5px; outline: none; }
+        button:hover, select:hover { background-color: #444; border-color: #777; }
+        button:active { transform: scale(0.98); }
+        
+        .btn-add { background-color: #1a5c20; border-color: #2e7d32; }
+        .btn-add:hover { background-color: #2e7d32; }
+        .btn-remove { background-color: #6d1b1b; border-color: #8a2be2; }
+        .btn-remove:hover { background-color: #912222; }
+
+        .separator { width: 1px; height: 25px; background-color: #444; margin: 0 5px; }
+        .setting-label { font-size: 11px; color: #888; margin-right: -5px; }
+
+        /* Grid Alanı */
+        .device-grid { flex: 1; padding: 30px; display: flex; flex-wrap: wrap; gap: 30px; overflow-y: auto; align-content: flex-start; justify-content: center; background-image: radial-gradient(#222 1px, transparent 1px); background-size: 20px 20px; }
+        
+        /* Telefon Çerçevesi (Dinamik Boyut) */
+        .device-wrapper { 
+            /* JS tarafından set edilecek */
+            background-color: #000; 
+            border-radius: 25px; /* Küçüldüğü için radius da azaldı */
+            border: 8px solid #222; /* Çerçeve inceldi */
+            position: relative; 
+            box-shadow: 0 15px 40px rgba(0,0,0,0.6); 
+            display: flex; flex-direction: column; overflow: hidden; 
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            animation: popIn 0.3s ease-out forwards;
+        }
+        
+        @keyframes popIn {
+            from { transform: scale(0.8); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        .device-wrapper:hover { border-color: #444; transform: translateY(-3px); box-shadow: 0 20px 50px rgba(0,0,0,0.8); }
+        
+        .device-header { height: 20px; background-color: #151515; display: flex; justify-content: center; align-items: center; font-size: 10px; color: #555; border-bottom: 1px solid #222; letter-spacing: 1px; }
+        
+        iframe { flex: 1; border: none; width: 100%; height: 100%; background-color: #fff; }
+        
+        .empty-state { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #555; text-align: center; }
+        .empty-state h2 { margin-bottom: 10px; color: #777; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <div class="logo"><span>RemoteNex</span></div>
+        
+        <div class="controls">
+            <button class="btn-add" onclick="addDevice()">Oyuncu Ekle</button>
+            <button class="btn-remove" onclick="removeLastDevice()">Oyuncu Sil</button>
+            
+            <div class="separator"></div>
+
+            <span class="setting-label">Model:</span>
+            <select id="device-selector" onchange="updateLayout()">
+                <option value="375x667">iPhone SE</option>
+                <option value="390x844" selected>iPhone 14</option>
+                <option value="430x932">iPhone 14 Pro Max</option>
+                <option value="412x915">Pixel 7</option>
+                <option value="768x1024">iPad Mini</option>
+                <option value="1024x1366">iPad Pro</option>
+            </select>
+
+            <button onclick="toggleOrientation()">
+                🔄 <span id="orientation-text">Dikey</span>
+            </button>
+            
+            <div class="separator"></div>
+            <span id="count-label" style="color: #888; font-size: 12px;">0 Cihaz</span>
+        </div>
+    </div>
+
+    <div class="device-grid" id="grid">
+        <div class="empty-state" id="emptyMsg">
+            <h2>Yükleniyor...</h2>
+        </div>
+    </div>
+
+    <script>
+        let deviceCount = 0;
+        let isLandscape = false;
+        
+        // 🔥 ÖLÇEK ÇARPANI: %65 Boyut (0.65)
+        // Burayı değiştirerek daha da küçültüp büyütebilirsin.
+        const scaleFactor = 0.65; 
+        
+        const grid = document.getElementById('grid');
+        const emptyMsg = document.getElementById('emptyMsg');
+        const countLabel = document.getElementById('count-label');
+        const deviceSelector = document.getElementById('device-selector');
+        const orientationText = document.getElementById('orientation-text');
+
+        function addDevice() {
+            emptyMsg.style.display = 'none';
+            deviceCount++;
+            
+            const isMaster = (deviceCount === 1);
+            const role = isMaster ? 'master' : 'normal';
+            const userId = 'SimPlayer_' + deviceCount;
+            const url = `/${role}?sim_id=${userId}`;
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'device-wrapper';
+            wrapper.id = 'device-' + deviceCount;
+            
+            applySize(wrapper);
+
+            wrapper.innerHTML = `
+                <div class="device-header">
+                    ${userId} • ${role.toUpperCase()}
+                </div>
+                <iframe src="${url}"></iframe>
+            `;
+
+            grid.appendChild(wrapper);
+            updateCount();
+        }
+
+        function removeLastDevice() {
+            if (deviceCount > 0) {
+                // Silinecek olanın ID'si
+                const userId = 'SimPlayer_' + deviceCount;
+
+                // 1. Sunucuya "ÇIKTIM" haberi gönder (Ayırıcı: |||)
+                // Bridge bunu okuyup listeden düşecek
+                fetch('/api/send', {
+                    method: 'POST',
+                    body: userId + '|||EXIT'
+                });
+
+                // 2. Görseli kaldır
+                const lastDevice = document.getElementById('device-' + deviceCount);
+                if (lastDevice) lastDevice.remove();
+                
+                deviceCount--;
+                
+                if (deviceCount === 0) {
+                    emptyMsg.style.display = 'flex';
+                    emptyMsg.innerHTML = '<h2>Test Alanı Boş</h2><p>Oyuncu ekleyerek teste başlayın.</p>';
+                }
+                updateCount();
+            }
+        }
+
+        function updateLayout() {
+            const devices = document.querySelectorAll('.device-wrapper');
+            devices.forEach(device => {
+                applySize(device);
+            });
+        }
+
+        function toggleOrientation() {
+            isLandscape = !isLandscape;
+            orientationText.innerText = isLandscape ? "Yatay" : "Dikey";
+            updateLayout();
+        }
+
+        function applySize(element) {
+            const val = deviceSelector.value;
+            let [rawW, rawH] = val.split('x');
+
+            // Gerçek boyutu ölçekle çarpıyoruz
+            let w = parseInt(rawW) * scaleFactor;
+            let h = parseInt(rawH) * scaleFactor;
+
+            if (isLandscape) {
+                element.style.width = h + 'px';
+                element.style.height = w + 'px';
+                // Radius ayarı (Küçültülmüş haliyle)
+                if(parseInt(rawW) < 600) element.style.borderRadius = "20px";
+            } else {
+                element.style.width = w + 'px';
+                element.style.height = h + 'px';
+                element.style.borderRadius = "25px";
+            }
+        }
+
+        function updateCount() {
+            countLabel.innerText = deviceCount + " Cihaz";
+        }
+
+        window.addEventListener('load', () => {
+            addDevice();
+        });
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "name": "com.veloralp.remotenex",
+  "version": "1.0.0",
+  "displayName": "RemoteNex SDK",
+  "description": "Turn any smartphone into a game controller for your Unity games.",
+  "unity": "6000.053",
+  "author": {
+    "name": "Veloralp",
+    "url": "https://remotenex.veloralp.com"
+  }
+}
