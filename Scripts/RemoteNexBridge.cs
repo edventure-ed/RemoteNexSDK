@@ -25,98 +25,84 @@ public class RemoteNexBridge : MonoBehaviour
     private HttpListener httpListener;
     private Thread serverThread;
     private bool isRunning = false;
+    private string cachedSimPath, cachedMasterPath, cachedNormalPath, rootDirectory;
 
-    private string cachedSimPath;
-    private string cachedMasterPath;
-    private string cachedNormalPath;
-    private string rootDirectory;
+    private struct ServerMessage
+    {
+        public int id;
+        public string content;
+    }
 
-    private const string FAKE_MOVE_KEY = "MOVE";
-    private ConcurrentQueue<string> messageQueue = new ConcurrentQueue<string>();
+    private List<ServerMessage> messageHistory = new List<ServerMessage>();
+    private int globalMessageIdCounter = 0;
+    private object lockObj = new object(); 
 
-    // Bağlı kullanıcıları tutan liste
+    private ConcurrentQueue<string> inboundQueue = new ConcurrentQueue<string>();
     private HashSet<string> connectedSimUsers = new HashSet<string>();
 
-    void Start()
+    void OnEnable()
     {
+        RemoteNex.OnDataSent += BroadcastMessage;
         StartLocalServer();
+    }
+
+    void OnDisable()
+    {
+        RemoteNex.OnDataSent -= BroadcastMessage;
+        StopLocalServer();
+    }
+
+    void BroadcastMessage(string data)
+    {
+        lock (lockObj)
+        {
+            globalMessageIdCounter++;
+            messageHistory.Add(new ServerMessage { id = globalMessageIdCounter, content = data });
+
+            if (messageHistory.Count > 500) messageHistory.RemoveAt(0);
+        }
     }
 
     void Update()
     {
-        while (messageQueue.TryDequeue(out string rawData))
+        while (inboundQueue.TryDequeue(out string rawData))
         {
-            // Format: "SimPlayer_1|||DATA"
-            string[] parts = rawData.Split(new string[] { "|||" }, StringSplitOptions.None);
-            if (parts.Length < 2) continue;
-
-            string userId = parts[0];
-            string content = parts[1];
-
-            // --- ÇIKIŞ İŞLEMİ (EXIT) ---
-            if (content == "EXIT")
-            {
-                if (connectedSimUsers.Contains(userId))
-                {
-                    connectedSimUsers.Remove(userId);
-                    Debug.Log($"❌ [SİMÜLATÖR] Ayrıldı: {userId}");
-
-                    // 🔥 KRİTİK: Listeden sildikten sonra oyuna GÜNCEL listeyi hemen yolla.
-                    // Oyun, listede bu ID'yi göremeyince objeyi yok edecek.
-                    SendFullPlayerListToGame();
-                }
-                continue;
-            }
-
-            // --- GİRİŞ İŞLEMİ (JOIN / MOVE) ---
-            // Eğer listede yoksa ekle ve listeyi güncelle
-            if (!connectedSimUsers.Contains(userId))
-            {
-                connectedSimUsers.Add(userId);
-                SendFullPlayerListToGame();
-            }
-
-            // JOIN sadece listeye girmek içindi, işi bitti.
-            if (content == "JOIN") continue;
-
-            // --- HAREKET VERİSİ ---
-            if (content.StartsWith("MOVE"))
-            {
-                string dataPart = content.Substring(5); // "UP:PRESS"
-                string gameMsg = $"{userId}:{FAKE_MOVE_KEY}:{dataPart}";
-
-                // Debug.Log($"📩 [SİMÜLATÖR] Hareket: {gameMsg}");
-                RemoteNex.TriggerInput(gameMsg);
-            }
+            ProcessInboundData(rawData);
         }
     }
 
-    // Listeyi oyuna gönderen fonksiyon
-    void SendFullPlayerListToGame()
+    void ProcessInboundData(string rawData)
     {
-        // Liste boşsa bile gönder ki oyun herkesin çıktığını anlasın.
+        string[] parts = rawData.Split(new string[] { "|||" }, StringSplitOptions.None);
+        if (parts.Length < 2) return;
 
-        List<string> formattedUsers = new List<string>();
-        int index = 0;
-        var sortedUsers = connectedSimUsers.OrderBy(u => u).ToList();
+        string userId = parts[0];
+        string content = parts[1];
 
-        foreach (var user in sortedUsers)
+        if (content == "EXIT")
         {
-            // Backend formatı: INDEX:NAME:ID
-            formattedUsers.Add($"{index}:SimUser:{user}");
-            index++;
+            if (connectedSimUsers.Contains(userId)) { connectedSimUsers.Remove(userId); SendPlayerList(); }
+            return;
         }
+        if (!connectedSimUsers.Contains(userId))
+        {
+            connectedSimUsers.Add(userId);
+            SendPlayerList();
+        }
+        if (content == "JOIN") return;
 
-        string fullListString = string.Join(",", formattedUsers);
-        // Format: :PLAYERS:User1,User2...
-        string finalPacket = $":PLAYERS:{fullListString}";
-
-        Debug.Log($"📋 [SDK -> OYUN] Oyuncu Listesi: {finalPacket}");
-        RemoteNex.TriggerInput(finalPacket);
+        string gameMsg = content.StartsWith("MOVE") ? $"{userId}:{content}" : $"{userId}:MOVE:{content}";
+        RemoteNex.TriggerInput(gameMsg);
     }
 
-    // --- SUNUCU KODLARININ GERİ KALANI (AYNEN KALIYOR) ---
-    void OnApplicationQuit() { StopLocalServer(); }
+    void SendPlayerList()
+    {
+        List<string> list = new List<string>();
+        int i = 0;
+        foreach (var u in connectedSimUsers.OrderBy(x => x)) list.Add($"{i++}:SimUser:{u}");
+        RemoteNex.TriggerInput($":PLAYERS:{string.Join(",", list)}");
+    }
+
     void StartLocalServer()
     {
         if (simulatorHtmlFile == null) return;
@@ -126,43 +112,126 @@ public class RemoteNexBridge : MonoBehaviour
         cachedNormalPath = (normalHtmlFile != null) ? Path.GetFullPath(AssetDatabase.GetAssetPath(normalHtmlFile)) : "";
         rootDirectory = (cachedMasterPath != "") ? Path.GetDirectoryName(cachedMasterPath) : "";
 #endif
-        try { httpListener = new HttpListener(); httpListener.Prefixes.Add($"http://localhost:{port}/"); httpListener.Start(); isRunning = true; serverThread = new Thread(ServerLoop); serverThread.Start(); if (autoOpenBrowser) Application.OpenURL($"http://localhost:{port}/"); } catch { }
+        try
+        {
+            httpListener = new HttpListener();
+            httpListener.Prefixes.Add($"http://localhost:{port}/");
+            httpListener.Start();
+            isRunning = true;
+            serverThread = new Thread(ServerLoop);
+            serverThread.Start();
+            if (autoOpenBrowser) Application.OpenURL($"http://localhost:{port}/");
+        }
+        catch (Exception e) { Debug.LogError("Port Hatası: " + e.Message); }
     }
+
     void StopLocalServer() { isRunning = false; if (httpListener != null) { httpListener.Stop(); httpListener.Close(); } if (serverThread != null) serverThread.Abort(); }
-    void ServerLoop() { while (isRunning && httpListener != null && httpListener.IsListening) { try { var ctx = httpListener.GetContext(); if (ctx.Request.HttpMethod == "POST" && ctx.Request.Url.AbsolutePath == "/api/send") HandlePost(ctx); else HandleGet(ctx); } catch { } } }
-    void HandlePost(HttpListenerContext ctx) { using (var r = new StreamReader(ctx.Request.InputStream)) messageQueue.Enqueue(r.ReadToEnd()); ctx.Response.Close(); }
-    void HandleGet(HttpListenerContext ctx)
+
+    void ServerLoop()
+    {
+        while (isRunning && httpListener != null && httpListener.IsListening)
+        {
+            try
+            {
+                var ctx = httpListener.GetContext();
+                string path = ctx.Request.Url.AbsolutePath;
+
+                if (ctx.Request.HttpMethod == "POST" && path == "/api/send") HandlePost(ctx);
+                else if (ctx.Request.HttpMethod == "GET" && path == "/api/events") HandleGetEvents(ctx);
+                else HandleGetFile(ctx);
+            }
+            catch { }
+        }
+    }
+
+    void HandlePost(HttpListenerContext ctx)
+    {
+        using (var r = new StreamReader(ctx.Request.InputStream)) inboundQueue.Enqueue(r.ReadToEnd());
+        ctx.Response.StatusCode = 200; ctx.Response.Close();
+    }
+
+    void HandleGetEvents(HttpListenerContext ctx)
+    {
+        int lastId = 0;
+        string sinceParam = ctx.Request.QueryString["since"];
+        if (!string.IsNullOrEmpty(sinceParam)) int.TryParse(sinceParam, out lastId);
+
+        List<string> newMessages = new List<string>();
+        int maxId = lastId;
+
+        lock (lockObj)
+        {
+            foreach (var msg in messageHistory)
+            {
+                if (msg.id > lastId)
+                {
+                    newMessages.Add(msg.content);
+                    maxId = Math.Max(maxId, msg.id);
+                }
+            }
+        }
+
+        string jsonArray = "[";
+        for (int i = 0; i < newMessages.Count; i++)
+        {
+            jsonArray += "\"" + newMessages[i] + "\"";
+            if (i < newMessages.Count - 1) jsonArray += ",";
+        }
+        jsonArray += "]";
+
+        string responseJson = $"{{\"last_id\": {maxId}, \"messages\": {jsonArray}}}";
+
+        byte[] buf = Encoding.UTF8.GetBytes(responseJson);
+        ctx.Response.ContentType = "application/json";
+        ctx.Response.ContentLength64 = buf.Length;
+        ctx.Response.OutputStream.Write(buf, 0, buf.Length);
+        ctx.Response.Close();
+    }
+
+    void HandleGetFile(HttpListenerContext ctx)
     {
         string path = ctx.Request.Url.AbsolutePath;
-        if (path.Contains("favicon")) { ctx.Response.StatusCode = 200; ctx.Response.Close(); return; }
-        string file = "";
-        if (path == "/" || path == "/index.html") file = cachedSimPath;
-        else if (path == "/master") file = cachedMasterPath;
-        else if (path == "/normal") file = cachedNormalPath;
-        else if (rootDirectory != "") file = Path.Combine(rootDirectory, path.TrimStart('/'));
+        string file = (path == "/" || path == "/index.html") ? cachedSimPath :
+                      (path == "/master") ? cachedMasterPath :
+                      (path == "/normal") ? cachedNormalPath :
+                      (rootDirectory != "") ? Path.Combine(rootDirectory, path.TrimStart('/')) : "";
 
         if (File.Exists(file)) ServeFile(ctx, file); else { ctx.Response.StatusCode = 404; ctx.Response.Close(); }
     }
+
     void ServeFile(HttpListenerContext ctx, string path)
     {
         byte[] buf = File.ReadAllBytes(path);
         string ext = Path.GetExtension(path).ToLower();
         if (path.Contains(".html.txt")) ext = ".html";
+
         if (ext == ".html")
         {
             string html = File.ReadAllText(path);
             string script = @"<script>
                 const p = new URLSearchParams(window.location.search); const id = p.get('sim_id')||'U';
-                window.ReactNativeWebView={postMessage:function(m){fetch('/api/send',{method:'POST',body:id+'|||'+m})}};
+                window.ReactNativeWebView = { postMessage: function(m) { fetch('/api/send', {method:'POST', body:id+'|||'+m}); }};
+                
+                let lastMsgId = 0;
+                setInterval(() => {
+                    fetch('/api/events?since=' + lastMsgId)
+                        .then(r => r.json())
+                        .then(data => {
+                            lastMsgId = data.last_id; // İmleci güncelle
+                            if(data.messages.length > 0 && window.handleServerMessage) {
+                                data.messages.forEach(m => { console.log('IN:', m); window.handleServerMessage(m); });
+                            }
+                        }).catch(e=>{});
+                }, 100); // 100ms polling
+
                 setTimeout(()=>{window.ReactNativeWebView.postMessage('JOIN')},500);
-                function t(e,ty){e.dispatchEvent(new Event(ty,{bubbles:true,cancelable:true}))}
-                document.addEventListener('mousedown',e=>t(e.target,'touchstart'));
-                document.addEventListener('mouseup',e=>t(e.target,'touchend'));
             </script></body>";
+
             if (html.Contains("</body>")) html = html.Replace("</body>", script); else html += script;
             buf = Encoding.UTF8.GetBytes(html);
         }
-        ctx.Response.ContentType = (ext == ".html") ? "text/html" : (ext == ".css" ? "text/css" : "application/octet-stream");
+
+        ctx.Response.ContentType = (ext == ".html") ? "text/html" : "application/octet-stream";
         ctx.Response.ContentLength64 = buf.Length; ctx.Response.OutputStream.Write(buf, 0, buf.Length); ctx.Response.Close();
     }
 }

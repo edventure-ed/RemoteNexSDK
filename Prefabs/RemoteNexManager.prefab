@@ -10,6 +10,7 @@ GameObject:
   m_Component:
   - component: {fileID: 7952154836590362414}
   - component: {fileID: 5670020979819618691}
+  - component: {fileID: -5030577091705439388}
   m_Layer: 0
   m_Name: RemoteNexManager
   m_TagString: Untagged
@@ -49,3 +50,25 @@ MonoBehaviour:
   normalHtmlFile: {fileID: 0}
   port: 8080
   autoOpenBrowser: 1
+--- !u!114 &-5030577091705439388
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1354105332252744969}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f87176f96437e7f47bf5c8cca8b8f423, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  backendUrl: https://app-remotenex-server-eaeygufucgg5gkdg.westeurope-01.azurewebsites.net/api/translate
+  sourceLanguageCode: tr
+  runInEditor: 0
+  overrideLanguage: 
+  fadeInDuration: 0.5
+  defaultFont: {fileID: 0}
+  specificFonts:
+  - languageCode: ja
+    fontAsset: {fileID: 11400000, guid: f5e633d52b3a33a4ab42306f81af1128, type: 2}
+  textsToTranslate: []
